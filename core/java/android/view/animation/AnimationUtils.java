@@ -228,8 +228,7 @@ public class AnimationUtils {
     public static Animation loadAnimation(Context context, @AnimRes int id)
             throws NotFoundException {
 
-        if (SystemProperties.getBoolean("persist.sys.activity_anim_perf_override", false)) {
-            ActivityAnimations.maybeInit(context);
+        if (ActivityAnimations.sPerfAnimEnabled) {
             switch (id) {
                 case R.anim.activity_open_enter:
                     return ActivityAnimations.getOpenEnter();
@@ -526,6 +525,9 @@ public class AnimationUtils {
     /** @hide */
     public final class ActivityAnimations {
 
+        public static final boolean sPerfAnimEnabled = SystemProperties.getBoolean(
+                "persist.sys.activity_anim_perf_override", false);
+
         private static Animation sOpenEnter;
         private static Animation sOpenExit;
         private static Animation sCloseEnter;
@@ -540,17 +542,31 @@ public class AnimationUtils {
         private ActivityAnimations() {}
 
         /** @hide */
-        public static void maybeInit(Context context) {
-            if (sSpatialSpec == null) {
-                sSpatialSpec = new SpringInterpolator(0.8f, 380f);
-                sEffectsSpec = new SpringInterpolator(1.0f, 3800f);
-            }
+        public static void preload(Context context) {
+            sSpatialSpec = new SpringInterpolator(0.8f, 380f);
+            sEffectsSpec = new SpringInterpolator(1.0f, 3800f);
             sBackdropColor = context.getColor(
                     com.android.internal.R.color.materialColorSurfaceContainer);
-            if (sOpenEnter != null) sOpenEnter.setBackdropColor(sBackdropColor);
-            if (sOpenExit != null) sOpenExit.setBackdropColor(sBackdropColor);
-            if (sCloseEnter != null) sCloseEnter.setBackdropColor(sBackdropColor);
-            if (sCloseExit != null) sCloseExit.setBackdropColor(sBackdropColor);
+            sOpenEnter = new ActivityAnimFactory()
+                    .fromX(1.0f)
+                    .toX(0.0f)
+                    .fade(0.0f, 1.0f)
+                    .build();
+            sOpenExit = new ActivityAnimFactory()
+                    .fromX(0.0f)
+                    .toX(-DISTANCE)
+                    .fade(1.0f, 0.0f)
+                    .build();
+            sCloseEnter = new ActivityAnimFactory()
+                        .fromX(-DISTANCE)
+                        .toX(0.0f)
+                        .fade(0.0f, 1.0f)
+                        .build();
+            sCloseExit = new ActivityAnimFactory()
+                        .fromX(0.0f)
+                        .toX(1.0f)
+                        .fade(1.0f, 0.0f)
+                        .build();
         }
 
         private static class ActivityAnimFactory {
@@ -598,49 +614,21 @@ public class AnimationUtils {
 
         /** @hide */
         public static Animation getOpenEnter() {
-            if (sOpenEnter == null) {
-                sOpenEnter = new ActivityAnimFactory()
-                        .fromX(1.0f)
-                        .toX(0.0f)
-                        .fade(0.0f, 1.0f)
-                        .build();
-            }
             return sOpenEnter;
         }
 
         /** @hide */
         public static Animation getOpenExit() {
-            if (sOpenExit == null) {
-                sOpenExit = new ActivityAnimFactory()
-                        .fromX(0.0f)
-                        .toX(-DISTANCE)
-                        .fade(1.0f, 0.0f)
-                        .build();
-            }
             return sOpenExit;
         }
 
         /** @hide */
         public static Animation getCloseEnter() {
-            if (sCloseEnter == null) {
-                sCloseEnter = new ActivityAnimFactory()
-                        .fromX(-DISTANCE)
-                        .toX(0.0f)
-                        .fade(0.0f, 1.0f)
-                        .build();
-            }
             return sCloseEnter;
         }
 
         /** @hide */
         public static Animation getCloseExit() {
-            if (sCloseExit == null) {
-                sCloseExit = new ActivityAnimFactory()
-                        .fromX(0.0f)
-                        .toX(1.0f)
-                        .fade(1.0f, 0.0f)
-                        .build();
-            }
             return sCloseExit;
         }
     }
