@@ -298,6 +298,7 @@ import com.android.internal.policy.PhoneFallbackEventHandler;
 import com.android.internal.protolog.ProtoLog;
 import com.android.internal.util.FastPrintWriter;
 import com.android.internal.util.NtThreeFingerGestureHelper;
+import com.android.internal.util.BoostHelper;
 import com.android.internal.util.ScrollOptimizer;
 import com.android.internal.view.BaseSurfaceHolder;
 import com.android.internal.view.RootViewSurfaceTaker;
@@ -340,6 +341,8 @@ public final class ViewRootImpl implements ViewParent,
     private static final String TAG = "ViewRootImpl";
     private static final boolean DBG = false;
     private static final boolean LOCAL_LOGV = false;
+    private static final boolean FIRST_FRAME_OPT =
+            SystemProperties.getBoolean("persist.sys.ax.first_frame_opt", true);
     /** @noinspection PointlessBooleanExpression*/
     private static final boolean DEBUG_DRAW = false || LOCAL_LOGV;
     private static final boolean DEBUG_LAYOUT = false || LOCAL_LOGV;
@@ -726,6 +729,8 @@ public final class ViewRootImpl implements ViewParent,
 
     public boolean mTraversalScheduled;
     int mTraversalBarrier;
+    private boolean mFirstFrameScheduled;
+    private int mDoFrameIndex;
     boolean mWillDrawSoon;
     private boolean mIsNeedDrawLast = false;
     private boolean mResident = false;
@@ -2882,6 +2887,7 @@ public final class ViewRootImpl implements ViewParent,
         }
         mBlastBufferQueue = new BLASTBufferQueue(mTag, true /* updateDestinationFrame */);
         ScrollOptimizer.setBLASTBufferQueue(mBlastBufferQueue);
+        BoostHelper.onFrameStage(BoostHelper.Frame.RENDER_INFO, 0L);
         // If we create and destroy BBQ without recreating the SurfaceControl, we can end up
         // queuing buffers on multiple apply tokens causing out of order buffer submissions. We
         // fix this by setting the same apply token on all BBQs created by this VRI.
@@ -3111,6 +3117,9 @@ public final class ViewRootImpl implements ViewParent,
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     void scheduleTraversals() {
         if (!mTraversalScheduled) {
+            if (tryScheduleTraversalsImmediately()) {
+                return;
+            }
             mTraversalScheduled = true;
             // The following behavior is load-bearing for public API correctness.
             // For example, the following code is defined to be correct and the
@@ -3141,6 +3150,29 @@ public final class ViewRootImpl implements ViewParent,
             notifyRendererOfFramePending();
             pokeDrawLockIfNeeded();
         }
+    }
+
+    private boolean tryScheduleTraversalsImmediately() {
+        if (!FIRST_FRAME_OPT || mFirstFrameScheduled || mDoFrameIndex >= 2 || !mAdded) {
+            return false;
+        }
+        mFirstFrameScheduled = true;
+        mDoFrameIndex++;
+        mTraversalScheduled = true;
+        try {
+            mQueue.removeSyncBarrier(mTraversalBarrier);
+        } catch (IllegalStateException ignored) {
+        }
+        mTraversalBarrier = mQueue.postSyncBarrier();
+        mChoreographer.postCallbackImmediately(
+                Choreographer.CALLBACK_TRAVERSAL, mTraversalRunnable, null);
+        mChoreographer.doFrameImmediately();
+        if (!mUnbufferedInputDispatch) {
+            scheduleConsumeBatchedInput();
+        }
+        notifyRendererOfFramePending();
+        pokeDrawLockIfNeeded();
+        return true;
     }
 
     void unscheduleTraversals() {
@@ -8441,6 +8473,9 @@ public final class ViewRootImpl implements ViewParent,
 
             mAttachInfo.mUnbufferedDispatchRequested = false;
             mAttachInfo.mHandlingPointerEvent = true;
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                BoostHelper.onScrollEvent(BoostHelper.Scroll.INPUT_EVENT);
+            }
             // If the event was fully handled by the handwriting initiator, then don't dispatch it
             // to the view tree.
             handled = handled || mView.dispatchPointerEvent(event);

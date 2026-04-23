@@ -29,6 +29,7 @@ import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.ConnectivityManager
 import android.net.DnsResolver
+import android.net.InetAddresses
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -49,6 +50,8 @@ import java.net.URL
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509TrustManager
+import java.security.cert.X509Certificate
 import org.json.JSONObject
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
@@ -240,17 +243,20 @@ class ActionExecutor @Inject constructor(
             }
         }
 
-    private suspend fun awaitValidatedInternet(): Network? {
+    private suspend fun awaitInternet(requireValidated: Boolean): Network? {
         connectivityManager.activeNetwork?.let { current ->
             val caps = connectivityManager.getNetworkCapabilities(current)
-            if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+            val validated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+            if (hasInternet && (!requireValidated || validated)) {
                 return current
             }
         }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .apply {
+                if (requireValidated) addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            }
             .build()
         var registered: ConnectivityManager.NetworkCallback? = null
         return try {
@@ -281,12 +287,16 @@ class ActionExecutor @Inject constructor(
             val token = Binder.clearCallingIdentity()
             try {
                 val timeout = action.timeoutMs.coerceIn(1000, Action.MAX_HTTP_TIMEOUT_MS)
-                val network = awaitValidatedInternet()
-                    ?: error("No validated internet within timeout")
+                val network = awaitInternet(action.requireValidatedInternet)
+                    ?: error("No internet within timeout")
                 val url = URL(action.url)
-                val resolved = resolveHost(network, url.host)?.takeIf { it.isNotEmpty() }
-                    ?: resolveViaDoh(network, url.host)
-                    ?: error("Unable to resolve ${url.host}")
+                val host = url.host
+                val resolved = if (InetAddresses.isNumericAddress(host)) {
+                    listOf(InetAddresses.parseNumericAddress(host))
+                } else {
+                    resolveHost(network, host)?.takeIf { it.isNotEmpty() }
+                        ?: resolveViaDoh(network, host)
+                } ?: error("Unable to resolve $host")
                 val ip = resolved.first()
                 val responseCode = performRawHttpRequest(network, ip, url, action, timeout)
                 Log.d(TAG, "HTTP ${action.method} ${action.url} -> $responseCode " +
@@ -339,10 +349,14 @@ class ActionExecutor @Inject constructor(
 
         val socket: Socket = if (isHttps) {
             val ctx = SSLContext.getInstance("TLS")
-            ctx.init(null, null, null)
+            val trustManagers = if (action.ignoreSslErrors) arrayOf(TRUST_ALL_CERTS) else null
+            ctx.init(null, trustManagers, null)
             val ssl = ctx.socketFactory.createSocket(rawSocket, host, port, true) as SSLSocket
             ssl.sslParameters = ssl.sslParameters.apply {
-                serverNames = listOf(SNIHostName(host))
+                if (!InetAddresses.isNumericAddress(host)) {
+                    serverNames = listOf(SNIHostName(host))
+                }
+                if (action.ignoreSslErrors) endpointIdentificationAlgorithm = null
             }
             ssl.startHandshake()
             ssl
@@ -388,5 +402,11 @@ class ActionExecutor @Inject constructor(
         private const val SOUND_MAX_DURATION_MS = 5000L
         private const val NETWORK_WAIT_TIMEOUT_MS = 30_000L
         private const val DNS_TIMEOUT_MS = 10_000L
+
+        private val TRUST_ALL_CERTS = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
     }
 }

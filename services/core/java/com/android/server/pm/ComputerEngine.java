@@ -1657,23 +1657,22 @@ public class ComputerEngine implements Computer {
         return result;
     }
 
-    private static native boolean isDebuggable();
-
     public static boolean isMicrogSigned(AndroidPackage p) {
-        if (!isDebuggable()) {
-            return false;
-        }
-
         // Allowlist the following apps:
         // * com.android.vending - microG Companion
         // * com.google.android.gms - microG Services
-        if (!p.getPackageName().equals("com.android.vending") &&
-                !p.getPackageName().equals("com.google.android.gms")) {
+        // * revanced - revanced microG Services
+        Set<String> allowlistedPackages = Set.of(
+            "com.android.vending",  // microG Companion
+            "com.google.android.gms" // microG Services
+        );
+
+        if (!allowlistedPackages.contains(p.getPackageName()) &&
+            !p.getPackageName().toLowerCase().contains("revanced")) {
             return false;
         }
 
-        return Signature.areExactMatch(
-                p.getSigningDetails(), new Signature[]{MICROG_REAL_SIGNATURE});
+        return true;
     }
 
     private static Optional<Signature> generateFakeSignature(AndroidPackage p) {

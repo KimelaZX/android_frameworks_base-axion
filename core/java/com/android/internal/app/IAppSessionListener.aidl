@@ -13,30 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.android.systemui.pulse
+package com.android.internal.app;
 
-interface PulseData {
-    val fftBytes: ByteArray?
-    val isDataValid: Boolean
-
-    fun updateFFTData(bytes: ByteArray)
-    fun reset()
-}
-
-class PulseFFTData : PulseData {
-    private var _fftBytes: ByteArray? = null
-
-    override val fftBytes: ByteArray?
-        get() = _fftBytes
-
-    override val isDataValid: Boolean
-        get() = _fftBytes?.isNotEmpty() == true
-
-    override fun updateFFTData(bytes: ByteArray) {
-        _fftBytes = bytes.copyOf()
-    }
-
-    override fun reset() {
-        _fftBytes = null
-    }
+oneway interface IAppSessionListener {
+    void onAppUnlocked(String packageName, int userId);
+    void onAppLocked(String packageName, int userId);
 }
